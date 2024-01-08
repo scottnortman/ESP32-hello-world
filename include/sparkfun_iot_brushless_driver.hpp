@@ -23,18 +23,25 @@ static const uint8_t nSTDBY = 5;
 // ESP32_PIN26-GPIO4-nINT_MAG IRQ from the TMAG5273 magnetic sensor IC
 // ESP32_PIN16-GPIO13-AUX2 general purpose IO to S4 push button (GND when pressed)
 // ESP32_PIN13-GPIO14-AUX1 general purpose IO to S3 push button (GND when pressed)
+
 // ESP32_PIN27-GPIO16-UH phase control
 static const uint8_t UH_PHASE = 16;
+
 // ESP32_PIN28-GPIO17-UL phase control
 static const uint8_t UL_PHASE = 17;
+
 // ESP32_PIN30-GPIO18-VH phase control
 static const uint8_t VH_PHASE = 18;
+
 // ESP32_PIN31-GPIO19-WH phase control
 static const uint8_t WH_PHASE = 19;
+
 // ESP32_PIN33-GPIO21-SDA to TMAG and QWIIC connector
 // ESP32_PIN36-GPIO22-SCL to TMAG and QWIIC connector
+
 // ESP32_PIN37-GPIO23-VL phase control
 static const uint8_t VL_PHASE = 23;
+
 // ESP32_PIN10-GPIO25-Analog In 1
 // ESP32_PIN11-GPIO26-Analog In 0
 // ESP32_PIN12-GPIO27-PCB general purpose IO 2

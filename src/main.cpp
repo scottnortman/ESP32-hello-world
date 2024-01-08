@@ -1,3 +1,5 @@
+//youtube tutorial  https://www.youtube.com/watch?v=3B88qCny7Kg&t=451s
+
 
 
 #include <Arduino.h>
@@ -52,11 +54,14 @@ uint8_t angleCalculation = TMAG5273_XY_ANGLE_CALCULATION;
 //generic sensor for simplefoc
 //https://docs.simplefoc.com/generic_sensor
 float get_mag_angle( TMAG5273 &sensor){
-  uint8_t lsb = sensor.getReg(0x1A); //note:  this is a method I wrote for low level reg access
-  uint8_t msb = sensor.getReg(0x19);
-  uint16_t val = msb << 8 | lsb;
-  float ang = (float)val / 16.0;
-  return ang;
+
+  if((sensor.getMagneticChannel() != 0) && (sensor.getAngleEn() != 0)){
+    uint8_t lsb = sensor.getReg(0x1A); //note:  this is a method I wrote for low level reg access
+    uint8_t msb = sensor.getReg(0x19);
+    uint16_t val = msb << 8 | lsb;
+    float ang = (float)val / 16.0;
+    return ang;
+  }
 }
 
 
@@ -97,9 +102,9 @@ void setup() {
   Serial.begin(921600);
   Serial.println("Serial initialized...");
 
-  //
+  genSensor.init();
 
-  #if 0
+#if 0
   //I2C / TMAG init
   Wire.begin();
   int8_t ret = sensor.begin(i2cAddress, Wire);
@@ -126,7 +131,12 @@ void setup() {
 
 
 void loop() {
-  #if 0
+
+  genSensor.update();
+  Serial.printf("%0.2f\t%0.2f\n", genSensor.getAngle(), genSensor.getVelocity() );
+  delay(10);
+
+#if 0
   // put your main code here, to run repeatedly:
   leds[0] = CRGB::Red;
   FastLED.setBrightness(100);
@@ -147,6 +157,7 @@ void loop() {
   delay(1000);
   #endif
 
+  #if 0
   if((sensor.getMagneticChannel() != 0) && (sensor.getAngleEn() != 0)) // Checks if mag channels are on - turns on in setup
   {
     //float angleCalculation = sensor.getAngleResult();
@@ -172,6 +183,8 @@ void loop() {
   }
 
   delay(25);
+
+  #endif
 
 } //end loop
 
