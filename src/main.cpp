@@ -15,6 +15,9 @@
 #include "sparkfun_iot_brushless_driver.hpp"
 #include <FastLED.h>
 
+
+
+
 #define NUM_LEDS 1
 #define DATA_PIN WS2812_RGB
 
@@ -22,6 +25,49 @@
 #define DEG2RAD( dd ) ((float)dd*(float)0.01745329251)
 
 CRGB leds[NUM_LEDS];
+
+//https://github.com/dani007200964/Shellminator/blob/main/examples/...
+//  Shellminator_ESP32_server_with_Commander/Shellminator_ESP32_server_with_Commander.ino
+#include "Shellminator.hpp"
+#include "Shellminator-IO.hpp"
+
+// NOTE:  THERE IS A NAMESPACE COLLISION WITH THE COMMANDER INTERFACE FOR
+//  SIMPLEFOC; TO USE THE SHELLMINATOR / COMMANDER SHELL, THE FOLLOWING
+//  LINE MUST BE COMMENTED OUT IN SimpleFOC.h
+//  #include "communication/Commander.h"
+
+// Necessary includes
+#include "Commander-API.hpp"
+#include "Commander-IO.hpp"
+#include "Commander-API-Commands.hpp"
+
+// Create a Shellminator object, and initialize it to use Serial
+Shellminator shell( &Serial );
+
+
+const char logo[] = "SHELLMINATOR\r\n";
+
+// We have to create an object from Commander class.
+Commander commander;
+
+// We have to create the prototype functions for our commands.
+// The arguments has to be the same for all command functions.
+void cat_func(char *args, Stream *response);
+void dog_func( char *args, Stream *response );
+void sum_func( char *args, Stream *response );
+void led_func( char *args, Stream *response );
+
+// Commander API-tree
+Commander::API_t API_tree[] = {
+    apiElement( "cat", "Description for cat command.", cat_func ),
+    apiElement( "dog", "Description for dog command.", dog_func ),
+    apiElement( "led", "Toggle the buit-in LED.", led_func ),
+    apiElement( "sum", "This function sums two number from the argument list.", sum_func )
+};
+
+
+
+
 
 // note:  TMAG5273 is a multi axis sensor; in the physical configuration
 //  on the sparkfun iot board, the magnet on the back of the motor is 
@@ -89,6 +135,11 @@ float genericSensorReadCallback( void ){
 
 GenericSensor genSensor = GenericSensor(genericSensorReadCallback, genericSensorInit);
 
+
+
+// https://eugeniopace.org/arduino/cli/...
+//  2021/11/26/A-CLI-for-Arduino-Revisited.html
+
 void setup() {
 
 
@@ -103,6 +154,36 @@ void setup() {
   Serial.println("Serial initialized...");
 
   genSensor.init();
+
+  // Clear the terminal
+  shell.clear();
+
+  // Attach the logo.
+  shell.attachLogo( logo );
+
+  // Print start message
+  Serial.println( "Program begin..." );
+
+
+  // There is an option to attach a debug channel to Commander.
+  // It can be handy to find any problems during the initialization
+  // phase. In this example we will use Serial for this.
+  commander.attachDebugChannel( &Serial );
+
+  // At start, Commander does not know anything about our commands.
+  // We have to attach the API_tree array from the previous steps
+  // to Commander to work properly.
+  commander.attachTree( API_tree );
+
+  // Initialize Commander.
+  commander.init();
+
+  shell.attachCommander( &commander );
+
+  // initialize shell object.
+  shell.begin( "snortman" );
+
+
 
 #if 0
   //I2C / TMAG init
@@ -125,16 +206,23 @@ void setup() {
 
 
 
+
+
 }//end setup
 
+// CLI example code
 
-
+//end CLI example code
 
 void loop() {
 
-  genSensor.update();
-  Serial.printf("%0.2f\t%0.2f\n", genSensor.getAngle(), genSensor.getVelocity() );
-  delay(10);
+  //genSensor.update();
+  //Serial.printf("%0.2f\t%0.2f\n", genSensor.getAngle(), genSensor.getVelocity() );
+  //delay(10);
+
+  //interpreter.run();
+
+  shell.update();
 
 #if 0
   // put your main code here, to run repeatedly:
@@ -187,4 +275,73 @@ void loop() {
   #endif
 
 } //end loop
+
+/// This is an example function for the cat command
+void cat_func(char *args, Stream *response )
+{
+
+  response -> print("Hello from cat function!\r\n");
+
+}
+
+/// This is an example function for the dog command
+void dog_func(char *args, Stream *response )
+{
+
+  response -> print("Hello from dog function!\r\n");
+
+}
+
+/// This is an example function for the led command
+void led_func(char *args, Stream *response )
+{
+
+  // Toggle your LED pin here, if you have on your board
+  // digitalWrite( LED_PIN, !digitalRead( LED_PIN ) );
+  response -> print("LED toggle!\r\n");
+
+}
+
+/// This is an example function for the sum command
+void sum_func(char *args, Stream *response )
+{
+
+  // These variables will hold the value of the
+  // two numbers, that has to be summed.
+  int a = 0;
+  int b = 0;
+
+  // This variable will hold the result of the
+  // argument parser.
+  int argResult;
+
+  // This variable will hold the sum result.
+  int sum = 0;
+
+  argResult = sscanf( args, "%d %d", &a, &b );
+
+  // We have to check that we parsed successfully  the two
+  // numbers from the argument string.
+  if( argResult != 2 ){
+
+    // If we could not parse two numbers, we have an argument problem.
+    // We print out the problem to the response channel.
+    response -> print( "Argument error! Two numbers required, separated with a blank space.\r\n" );
+
+    // Sadly we have to stop the command execution and return.
+    return;
+
+  }
+
+  // Calculate the sum.
+  sum = a + b;
+
+  // Print out the result.
+  response -> print( a );
+  response -> print( " + " );
+  response -> print( b );
+  response -> print( " = " );
+  response -> println( sum );
+
+}
 
