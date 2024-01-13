@@ -46,14 +46,23 @@ static const uint8_t VL_PHASE = 23;
 // ESP32_PIN11-GPIO26-Analog In 0
 // ESP32_PIN12-GPIO27-PCB general purpose IO 2
 // ESP32_PIN8-GPIO32-CURR_SENSE out from amplifier
+static const uint8_t CURR_SENSE = 32;
 // ESP32_PIN9-GPIO33-WL phase control
 static const uint8_t WL_PHASE = 33;
-// ESP32_PIN6-DIAG output from TMC6300 3 phase bridge
+// ESP32_PIN6-GPIO-DIAG output from TMC6300 3 phase bridge
+static const uint8_t DIAG = 34;
 // ESP32_PIN7-U_OUT U phase sense output
 // ESP32_PIN4-V_OUT V phase sense output
 // ESP32_PIN5-W_OUT W phase sense output
 
 
+static const float DRV_VOLT_SUPP = 3.3;             // [V]
+static const long DRV_PWM_FREQ = 20000;             // [Hz]
+static const float DRV_VOLT_LIMIT = 3.3;  // [V]
+
+static const uint8_t    MTR_POLES = 8;         // [n]
+static const float MTR_VOLT_LIMIT = 3.3;            // [V]
+static const float MTR_VEL_LIMIT = 6.28;            // [rad/s]
 
 //static const int 
 

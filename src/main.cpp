@@ -57,12 +57,16 @@ void dog_func( char *args, Stream *response );
 void sum_func( char *args, Stream *response );
 void led_func( char *args, Stream *response );
 
+void mtr_ena_func(char *args, Stream *response);
+
 // Commander API-tree
 Commander::API_t API_tree[] = {
     apiElement( "cat", "Description for cat command.", cat_func ),
     apiElement( "dog", "Description for dog command.", dog_func ),
     apiElement( "led", "Toggle the buit-in LED.", led_func ),
-    apiElement( "sum", "This function sums two number from the argument list.", sum_func )
+    apiElement( "sum", "This function sums two number from the argument list.", sum_func ),
+
+    apiElement( "ena", "Enable/disable motor amplifier", mtr_ena_func)
 };
 
 
@@ -135,10 +139,8 @@ float genericSensorReadCallback( void ){
 
 GenericSensor genSensor = GenericSensor(genericSensorReadCallback, genericSensorInit);
 
-
-
-// https://eugeniopace.org/arduino/cli/...
-//  2021/11/26/A-CLI-for-Arduino-Revisited.html
+BLDCMotor motor = BLDCMotor(MTR_POLES);
+BLDCDriver6PWM driver = BLDCDriver6PWM(UH_PHASE, UL_PHASE, VH_PHASE, VL_PHASE, WH_PHASE, WL_PHASE);
 
 void setup() {
 
@@ -153,37 +155,50 @@ void setup() {
   Serial.begin(921600);
   Serial.println("Serial initialized...");
 
+  // Initialize the magnetic sensor
   genSensor.init();
 
   // Clear the terminal
   shell.clear();
-
   // Attach the logo.
   shell.attachLogo( logo );
-
   // Print start message
   Serial.println( "Program begin..." );
-
-
   // There is an option to attach a debug channel to Commander.
   // It can be handy to find any problems during the initialization
   // phase. In this example we will use Serial for this.
   commander.attachDebugChannel( &Serial );
-
   // At start, Commander does not know anything about our commands.
   // We have to attach the API_tree array from the previous steps
   // to Commander to work properly.
   commander.attachTree( API_tree );
-
   // Initialize Commander.
   commander.init();
-
   shell.attachCommander( &commander );
-
   // initialize shell object.
   shell.begin( "snortman" );
 
+  //Init IO needed to enable motor contorl
+  pinMode(nSTDBY, OUTPUT);
+  digitalWrite(nSTDBY, 1);
+  // Set TMC6300 DIAG connection to input
+  pinMode(DIAG, INPUT);
+  //TODO: set up interrupt for DIAG 
 
+
+  //SimpleFOC Motor Setup
+  driver.voltage_power_supply = DRV_VOLT_SUPP;
+  driver.pwm_frequency = DRV_PWM_FREQ;
+  driver.voltage_limit = DRV_VOLT_LIMIT;
+  driver.init();
+
+  motor.linkDriver(&driver);
+  motor.voltage_limit = MTR_VOLT_LIMIT;
+  motor.velocity_limit = MTR_VEL_LIMIT;
+  motor.controller = MotionControlType::velocity_openloop;
+  motor.init();
+  motor.enable();
+  
 
 #if 0
   //I2C / TMAG init
@@ -216,13 +231,13 @@ void setup() {
 
 void loop() {
 
-  //genSensor.update();
-  //Serial.printf("%0.2f\t%0.2f\n", genSensor.getAngle(), genSensor.getVelocity() );
-  //delay(10);
-
-  //interpreter.run();
+  genSensor.update();
+  Serial.printf("%0.2f\t%0.2f\r\n", genSensor.getAngle(), genSensor.getVelocity() );
+  delay(10);
 
   shell.update();
+
+  motor.move(1.0);
 
 #if 0
   // put your main code here, to run repeatedly:
@@ -344,4 +359,31 @@ void sum_func(char *args, Stream *response )
   response -> println( sum );
 
 }
+
+//commander function to enable / disable
+// example
+//  > ena 1
+//  > ena 0
+void mtr_ena_func(char *args, Stream *response){
+  // note:  the TMC6300 driver IC input pin 11 VIO/nSTDBY is driven by
+  //  ESP32_GPIO5
+  //
+
+  int val = 0;
+
+  int argResult = sscanf(args, "%d", &val);
+
+  if( argResult!=1 ){
+    Serial.println("Single [0|1] argument required...");
+    return;
+  }
+
+  if(0==val)
+    digitalWrite(nSTDBY, 0);
+  else if(1==val)
+   digitalWrite(nSTDBY, 1);
+  else
+    Serial.println("Single [0|1] argument required...");
+
+}//mtr_ena_func
 
