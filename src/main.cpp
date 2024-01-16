@@ -22,7 +22,9 @@
 #define DATA_PIN WS2812_RGB
 
 
-#define DEG2RAD( dd ) ((float)dd*(float)0.01745329251)
+#define DEG2RAD(dd) ((float)dd*(float)0.01745329251)
+#define RAD2DEG(rr)
+
 
 CRGB leds[NUM_LEDS];
 
@@ -58,6 +60,22 @@ void sum_func( char *args, Stream *response );
 void led_func( char *args, Stream *response );
 
 void mtr_ena_func(char *args, Stream *response);
+static float target = 0.0;
+void set_tgt_func(char *args, Stream *response){
+  sscanf(args, "%f", &target);
+}
+
+void vel_kp_func(char *args, Stream *response);
+void vel_ki_func(char *args, Stream *response);
+void vel_kd_func(char *args, Stream *response);
+void vel_ra_func(char *args, Stream *response); //todo
+void vel_tf_func(char *args, Stream *response); //todo
+
+void pos_kp_func(char *args, Stream *response);
+void pos_ki_func(char *args, Stream *response);
+void pos_kd_func(char *args, Stream *response);
+void pos_ra_func(char *args, Stream *response);//todo
+void pos_lm_func(char *args, Stream *response);//todo
 
 // Commander API-tree
 Commander::API_t API_tree[] = {
@@ -66,7 +84,17 @@ Commander::API_t API_tree[] = {
     apiElement( "led", "Toggle the buit-in LED.", led_func ),
     apiElement( "sum", "This function sums two number from the argument list.", sum_func ),
 
-    apiElement( "ena", "Enable/disable motor amplifier", mtr_ena_func)
+    apiElement("ena", "Enable/disable motor amplifier", mtr_ena_func),
+    apiElement("tgt", "Set target value", set_tgt_func ),
+
+    apiElement("vkp", "Get / set velocity kp gain", vel_kp_func ),
+    apiElement("vki", "Get / set velocity ki gain", vel_ki_func ),
+    apiElement("vkd", "Get / set velocity kd gain", vel_kd_func ),
+
+    apiElement("pkp", "Get / set position kp gain", pos_kp_func ),
+    apiElement("pki", "Get / set position ki gain", pos_ki_func ),
+    apiElement("pkd", "Get / set position kd gain", pos_kd_func )
+
 };
 
 
@@ -81,15 +109,7 @@ Commander::API_t API_tree[] = {
 //Sparkfun
 //https://github.com/sparkfun/SparkFun_TMAG5273_Arduino_Library/...
 //  blob/main/src/SparkFun_TMAG5273_Arduino_Library.h
-TMAG5273 sensor; // Initialize hall-effect sensor
-
-uint8_t i2cAddress = TMAG5273_I2C_ADDRESS_INITIAL;
-//uint8_t i2cAddress = 0x35;
-
-// Set constants for setting up device
-uint8_t conversionAverage = TMAG5273_X32_CONVERSION;
-uint8_t magneticChannel = TMAG5273_XYX_ENABLE;
-uint8_t angleCalculation = TMAG5273_XY_ANGLE_CALCULATION;
+TMAG5273 tmag; // Initialize hall-effect sensor
 
 
 //  https://docs.simplefoc.com/magnetic_sensor_i2c
@@ -112,6 +132,9 @@ float get_mag_angle( TMAG5273 &sensor){
     float ang = (float)val / 16.0;
     return ang;
   }
+  else{
+    return -1;
+  }
 }
 
 
@@ -121,26 +144,34 @@ void genericSensorInit( void ){
   uint8_t magneticChannel = TMAG5273_XYX_ENABLE;
   uint8_t angleCalculation = TMAG5273_XY_ANGLE_CALCULATION;
   Wire.begin();
-  sensor.begin(i2cAddress, Wire);
+  tmag.begin(i2cAddress, Wire);
   // Set the device at 32x average mode 
-  sensor.setConvAvg(conversionAverage);
+  tmag.setConvAvg(conversionAverage);
   // Choose new angle to calculate from
   // Can calculate angles between XYX, YXY, YZY, and XZX
-  sensor.setMagneticChannel(magneticChannel);
+  tmag.setMagneticChannel(magneticChannel);
   // Enable the angle calculation register
   // Can choose between XY, YZ, or XZ priority
-  sensor.setAngleEn(angleCalculation);
+  tmag.setAngleEn(angleCalculation);
+  _delay(5);
 }
 
 //Generic sensor to return [0..2*pi]
+//NOTE:  negative number not allowed to be returned
 float genericSensorReadCallback( void ){
-  return DEG2RAD( get_mag_angle(sensor) );
+  return DEG2RAD( get_mag_angle(tmag) );
 }
 
 GenericSensor genSensor = GenericSensor(genericSensorReadCallback, genericSensorInit);
-
 BLDCMotor motor = BLDCMotor(MTR_POLES);
 BLDCDriver6PWM driver = BLDCDriver6PWM(UH_PHASE, UL_PHASE, VH_PHASE, VL_PHASE, WH_PHASE, WL_PHASE);
+LowPassFilter velLPF = LowPassFilter(SENS_VEL_LPF_TF);
+LowPassFilter posLPF = LowPassFilter(SENS_POS_LPF_TF);
+
+// set up current sensing
+// https://docs.simplefoc.com/low_side_current_sense
+LowsideCurrentSense phase_current = LowsideCurrentSense(
+    CURR_SENSE_PHASE_RES, CURR_SENSE_PHASE_GAIN, CURR_SENSE_PHASE_U, CURR_SENSE_PHASE_V, CURR_SENSE_PHASE_W);
 
 void setup() {
 
@@ -155,8 +186,12 @@ void setup() {
   Serial.begin(921600);
   Serial.println("Serial initialized...");
 
+  motor.useMonitoring(Serial);
+
   // Initialize the magnetic sensor
   genSensor.init();
+
+  _delay(10);
 
   // Clear the terminal
   shell.clear();
@@ -192,13 +227,53 @@ void setup() {
   driver.voltage_limit = DRV_VOLT_LIMIT;
   driver.init();
 
+
+  phase_current.linkDriver(&driver);
+ 
+
   motor.linkDriver(&driver);
   motor.voltage_limit = MTR_VOLT_LIMIT;
   motor.velocity_limit = MTR_VEL_LIMIT;
-  motor.controller = MotionControlType::velocity_openloop;
-  motor.init();
-  motor.enable();
+  motor.LPF_velocity.Tf = MTR_LPF_TF;
+  motor.voltage_sensor_align = 1;
+
+  motor.linkSensor(&genSensor);
   
+
+  //open loop
+  //motor.controller = MotionControlType::velocity_openloop;
+  motor.torque_controller = TorqueControlType::voltage; // NOTE: voltage seems to have the best performance
+  motor.foc_modulation = FOCModulationType::SpaceVectorPWM;
+
+  motor.controller = MotionControlType::angle;
+  //motor.controller = MotionControlType::velocity;
+  //motor.controller = MotionControlType::torque;
+
+  // Default values found empirically with no load
+  motor.PID_velocity.P = VEL_KP_DFLT;
+  motor.PID_velocity.I = VEL_KI_DFLT;
+  motor.PID_velocity.D = VEL_KD_DFLT;
+  motor.PID_velocity.limit = VEL_RAMP_DFLT;
+
+  motor.P_angle.P = POS_KP_DFLT;
+  motor.P_angle.I = POS_KI_DFLT;
+  motor.P_angle.D = POS_KD_DFLT;
+  motor.P_angle.limit = POS_LIM_DFLT;
+  motor.P_angle.output_ramp = POS_RAMP_DFLT;
+
+  motor.init();
+
+  phase_current.init();
+  motor.linkCurrentSense(&phase_current);
+
+  motor.initFOC();
+
+  //voltage close loop
+
+ 
+
+  //motor.disable();
+  motor.enable();
 
 #if 0
   //I2C / TMAG init
@@ -231,13 +306,21 @@ void setup() {
 
 void loop() {
 
-  genSensor.update();
-  Serial.printf("%0.2f\t%0.2f\r\n", genSensor.getAngle(), genSensor.getVelocity() );
-  delay(10);
+  //genSensor.update();
+  //Serial.printf("%0.2f\t\t%0.2f\r\n", posLPF(genSensor.getAngle()), velLPF(genSensor.getVelocity()) );
+  //delay(10);
 
   shell.update();
 
-  motor.move(1.0);
+  motor.loopFOC();
+  motor.move(target);
+
+  //PhaseCurrent_s currents = phase_current.getPhaseCurrents();
+  //float current_magnitude = phase_current.getDCCurrent();
+
+  //Serial.printf("%0.2f\t%0.2f\t%0.2f\t%0.2f\r\n", currents.a * 1000.0, currents.b*1000.0, currents.c*1000.0, current_magnitude*1000.0);
+
+  //motor.monitor();
 
 #if 0
   // put your main code here, to run repeatedly:
@@ -379,11 +462,96 @@ void mtr_ena_func(char *args, Stream *response){
   }
 
   if(0==val)
-    digitalWrite(nSTDBY, 0);
+    motor.disable();
   else if(1==val)
-   digitalWrite(nSTDBY, 1);
+    motor.enable();
   else
     Serial.println("Single [0|1] argument required...");
 
 }//mtr_ena_func
+
+void vel_kp_func(char *args, Stream *response){
+  int n = 0;
+  float v = 0.0;
+  //todo: error checking
+  n=sscanf(args, "%f", &v);
+  if(EOF==n)
+    response->printf("VP:[%f]\r\n", motor.PID_velocity.P);
+  else if(1==n){  
+    motor.PID_velocity.P = v;
+    response->printf("VP:[%f]\r\n", motor.PID_velocity.P);
+  }
+  else
+    response->printf("Incorrect args, [%d,%f]...\r\n",n,v);
+}
+void vel_ki_func(char *args, Stream *response){
+  int n = 0;
+  float v = 0.0;
+  //todo: error checking
+  n=sscanf(args, "%f", &v);
+  if(EOF==n)
+    response->printf("VI:[%f]\r\n", motor.PID_velocity.I);
+  else if(1==n){  
+    motor.PID_velocity.I = v;
+    response->printf("VI:[%f]\r\n", motor.PID_velocity.I);
+  }
+  else
+    response->printf("Incorrect args...\r\n");
+}
+void vel_kd_func(char *args, Stream *response){
+  int n = 0;
+  float v = 0.0;
+  //todo: error checking
+  n=sscanf(args, "%f", &v);
+  if(EOF==n)
+    response->printf("VD:[%f]\r\n", motor.PID_velocity.D);
+  else if(1==n){  
+    motor.PID_velocity.D = v;
+    response->printf("VD:[%f]\r\n", motor.PID_velocity.D);
+  }
+  else
+    response->printf("Incorrect args...\r\n");
+}
+void pos_kp_func(char *args, Stream *response){
+  int n = 0;
+  float v = 0.0;
+  //todo: error checking
+  n=sscanf(args, "%f", &v);
+  if(EOF==n)
+    response->printf("PP:[%f]\r\n", motor.P_angle.P);
+  else if(1==n){  
+    motor.P_angle.P = v;
+    response->printf("PP:[%f]\r\n", motor.P_angle.P);
+  }
+  else
+    response->printf("Incorrect args...\r\n");
+};
+void pos_ki_func(char *args, Stream *response){
+  int n = 0;
+  float v = 0.0;
+  //todo: error checking
+  n=sscanf(args, "%f", &v);
+  if(EOF==n)
+    response->printf("PI:[%f]\r\n", motor.P_angle.I);
+  else if(1==n){  
+    motor.P_angle.I = v;
+    response->printf("PI:[%f]\r\n", motor.P_angle.I);
+  }
+  else
+    response->printf("Incorrect args...\r\n");
+};
+void pos_kd_func(char *args, Stream *response){
+  int n = 0;
+  float v = 0.0;
+  //todo: error checking
+  n=sscanf(args, "%f", &v);
+  if(EOF==n)
+    response->printf("PD:[%f]\r\n", motor.P_angle.D);
+  else if(1==n){  
+    motor.P_angle.D = v;
+    response->printf("PD:[%f]\r\n", motor.P_angle.D);
+  }
+  else
+    response->printf("Incorrect args...\r\n");
+};
 
