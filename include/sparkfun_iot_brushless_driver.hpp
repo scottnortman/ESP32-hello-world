@@ -38,7 +38,9 @@ static const uint8_t VH_PHASE = 18;
 static const uint8_t WH_PHASE = 19;
 
 // ESP32_PIN33-GPIO21-SDA to TMAG and QWIIC connector
+static const uint8_t TMAG_SDA = 21;
 // ESP32_PIN36-GPIO22-SCL to TMAG and QWIIC connector
+static const uint8_t TMAG_SCL = 22;
 
 // ESP32_PIN37-GPIO23-VL phase control
 static const uint8_t VL_PHASE = 23;
@@ -61,7 +63,7 @@ static const uint8_t CURR_SENSE_PHASE_W = 39;
 
 
 static const float DRV_VOLT_SUPP = 3.3;         // [V]
-static const long DRV_PWM_FREQ = 20000;         // [Hz] //docs suggest to stay @ ~20kHz
+static const long DRV_PWM_FREQ = 50000;         // [Hz] 
 static const float DRV_VOLT_LIMIT = 3.3;        // [V]
 
 //static const uint8_t    MTR_POLES = 8;          // [n]
@@ -70,7 +72,7 @@ static const float MTR_VOLT_LIMIT = 3.3;        // [V]
 static const float MTR_VEL_LIMIT = 5.0*2.0*PI;  // [rad/s]
 static const float MTR_LPF_TF = 0.01;           // [s]
 
-static const float SENS_VEL_LPF_TF = 0.05;      // [s]
+static const float SENS_VEL_LPF_TF = 0.1;      // [s]
 static const float SENS_POS_LPF_TF = 0.05;      // [s]
 
 //current sensing constants for individual phases UVW

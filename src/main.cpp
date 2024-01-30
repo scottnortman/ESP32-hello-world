@@ -1,8 +1,12 @@
 //youtube tutorial  https://www.youtube.com/watch?v=3B88qCny7Kg&t=451s
 
 
+#include <math.h>
 
 #include <Arduino.h>
+
+//https://community.simplefoc.com/t/possible-bug-with-esp32-micros-function/122
+#include <esp_timer.h>
 
 //note:  when using esp32 with the wire lib, I found I needed this to get Wire to init ok...
 #define CONFIG_DISABLE_HAL_LOCKS 1
@@ -14,8 +18,6 @@
 #include "SparkFun_TMAG5273_Arduino_Library.h"
 #include "sparkfun_iot_brushless_driver.hpp"
 #include <FastLED.h>
-
-
 
 
 #define NUM_LEDS 1
@@ -52,48 +54,55 @@ const char logo[] = "SHELLMINATOR\r\n";
 // We have to create an object from Commander class.
 Commander commander;
 
-// We have to create the prototype functions for our commands.
-// The arguments has to be the same for all command functions.
-void cat_func(char *args, Stream *response);
-void dog_func( char *args, Stream *response );
-void sum_func( char *args, Stream *response );
-void led_func( char *args, Stream *response );
-
 void mtr_ena_func(char *args, Stream *response);
 static float target = 0.0;
-void set_tgt_func(char *args, Stream *response){
-  sscanf(args, "%f", &target);
-}
+// Note
+// $ tgt <float>
+// $ tgt sin <ampl> <ofst> <freq_hz)
+// % tgt sqw <ampl> <ofst> <freq_hz>
+void set_tgt_func(char *args, Stream *response);
 
-void vel_kp_func(char *args, Stream *response);
-void vel_ki_func(char *args, Stream *response);
-void vel_kd_func(char *args, Stream *response);
-void vel_ra_func(char *args, Stream *response); //todo
-void vel_tf_func(char *args, Stream *response); //todo
+void mon_en_func(char *args, Stream *response); // Monitor output enable / disable
+void rgb_func(char *args, Stream *response);   // RGB LED control
 
-void pos_kp_func(char *args, Stream *response);
-void pos_ki_func(char *args, Stream *response);
-void pos_kd_func(char *args, Stream *response);
-void pos_ra_func(char *args, Stream *response);//todo
-void pos_lm_func(char *args, Stream *response);//todo
+void vel_kp_func(char *args, Stream *response); // Velocity Kp gain
+void vel_ki_func(char *args, Stream *response); // Velocity Ki gain
+void vel_kd_func(char *args, Stream *response); // Velocity Kd gain
+void vel_ra_func(char *args, Stream *response); // Velocity output ramp       [rad/s^2]
+void vel_tf_func(char *args, Stream *response); // Velocity Tf filter period  [s]
+
+void pos_kp_func(char *args, Stream *response); // Position Kp gain
+void pos_ki_func(char *args, Stream *response); // Position Ki gain
+void pos_kd_func(char *args, Stream *response); // Position Kd gain
+void pos_ra_func(char *args, Stream *response); // Position ramp,   [rad/s]
+void pos_lm_func(char *args, Stream *response); // Position limit,  [rad]
+
+void pid_shell_func(char *args, Stream *response);
+
+//Flag to enable monitoring
+static bool mon_enabled = false;
 
 // Commander API-tree
 Commander::API_t API_tree[] = {
-    apiElement( "cat", "Description for cat command.", cat_func ),
-    apiElement( "dog", "Description for dog command.", dog_func ),
-    apiElement( "led", "Toggle the buit-in LED.", led_func ),
-    apiElement( "sum", "This function sums two number from the argument list.", sum_func ),
 
-    apiElement("ena", "Enable/disable motor amplifier", mtr_ena_func),
-    apiElement("tgt", "Set target value", set_tgt_func ),
+    apiElement("ena", "Enable/Disable motor amplifier", mtr_ena_func),
+    apiElement("tgt", "Set target value", set_tgt_func),
+    apiElement("mon", "Enable/Disable monitoring", mon_en_func),
+    apiElement("rgb", "Get / set RGB values of LED", rgb_func),
 
-    apiElement("vkp", "Get / set velocity kp gain", vel_kp_func ),
-    apiElement("vki", "Get / set velocity ki gain", vel_ki_func ),
-    apiElement("vkd", "Get / set velocity kd gain", vel_kd_func ),
+    apiElement("vkp", "Get / set velocity kp gain", vel_kp_func),
+    apiElement("vki", "Get / set velocity ki gain", vel_ki_func),
+    apiElement("vkd", "Get / set velocity kd gain", vel_kd_func),
+    apiElement("vra", "Get / set velocity ramp", vel_ra_func),
+    apiElement("vtf", "Get / set velocity Tf", vel_tf_func),
 
-    apiElement("pkp", "Get / set position kp gain", pos_kp_func ),
-    apiElement("pki", "Get / set position ki gain", pos_ki_func ),
-    apiElement("pkd", "Get / set position kd gain", pos_kd_func )
+    apiElement("pkp", "Get / set position kp gain", pos_kp_func),
+    apiElement("pki", "Get / set position ki gain", pos_ki_func),
+    apiElement("pkd", "Get / set position kd gain", pos_kd_func),
+    apiElement("pra", "Get / set position ramp", pos_ra_func),
+    apiElement("plm", "Get / set position limit", pos_lm_func),
+
+    apiElement("pid", "Get / set PID Controller parameters", pid_shell_func),
 
 };
 
@@ -168,15 +177,15 @@ BLDCDriver6PWM driver = BLDCDriver6PWM(UH_PHASE, UL_PHASE, VH_PHASE, VL_PHASE, W
 LowPassFilter velLPF = LowPassFilter(SENS_VEL_LPF_TF);
 LowPassFilter posLPF = LowPassFilter(SENS_POS_LPF_TF);
 
-// set up current sensing
-// https://docs.simplefoc.com/low_side_current_sense
-LowsideCurrentSense phase_current = LowsideCurrentSense(
+//https://docs.simplefoc.com/dc_current_torque_mode
+InlineCurrentSense phase_current = InlineCurrentSense(
     CURR_SENSE_PHASE_RES, CURR_SENSE_PHASE_GAIN, CURR_SENSE_PHASE_U, CURR_SENSE_PHASE_V, CURR_SENSE_PHASE_W);
 
 void setup() {
 
 
   //RGB LED init
+
   FastLED.addLeds<WS2812, DATA_PIN, GRB>(leds, NUM_LEDS);
   leds[0] = CRGB::Red;
   FastLED.setBrightness(10);
@@ -242,12 +251,16 @@ void setup() {
 
   //open loop
   //motor.controller = MotionControlType::velocity_openloop;
-  motor.torque_controller = TorqueControlType::voltage; // NOTE: voltage seems to have the best performance
-  motor.foc_modulation = FOCModulationType::SpaceVectorPWM;
+  //motor.torque_controller = TorqueControlType::voltage; // NOTE: voltage seems to have the best performance
+  //motor.foc_modulation = FOCModulationType::SpaceVectorPWM;
 
-  motor.controller = MotionControlType::angle;
+  //debug/test FOC
+  motor.torque_controller = TorqueControlType::dc_current;
+
+
+  //motor.controller = MotionControlType::angle;
   //motor.controller = MotionControlType::velocity;
-  //motor.controller = MotionControlType::torque;
+  motor.controller = MotionControlType::torque;
 
   // Default values found empirically with no load
   motor.PID_velocity.P = VEL_KP_DFLT;
@@ -260,6 +273,21 @@ void setup() {
   motor.P_angle.D = POS_KD_DFLT;
   motor.P_angle.limit = POS_LIM_DFLT;
   motor.P_angle.output_ramp = POS_RAMP_DFLT;
+
+  motor.PID_current_d.P = 0.0;
+  motor.PID_current_d.I = 0.0;
+  motor.PID_current_d.D = 0.0;
+  motor.PID_current_d.limit = motor.voltage_limit;
+  motor.PID_current_d.output_ramp = 1e6;
+  motor.LPF_current_d.Tf = 0.01;
+
+  motor.PID_current_d.P = 0.0;
+  motor.PID_current_d.I = 0.0;
+  motor.PID_current_d.D = 0.0;
+  motor.PID_current_d.limit = motor.voltage_limit;
+  motor.PID_current_d.output_ramp = 1e6;
+  motor.LPF_current_d.Tf = 0.01;
+  
 
   motor.init();
 
@@ -274,6 +302,7 @@ void setup() {
 
   //motor.disable();
   motor.enable();
+
 
 #if 0
   //I2C / TMAG init
@@ -303,24 +332,51 @@ void setup() {
 // CLI example code
 
 //end CLI example code
+typedef enum
+{
+  TGT_WAVE_CONST = 0,
+  TGT_WAVE_SIN = 1,
+  TGT_WAVE_SQW = 2,
+} TGT_WAVE_TYPE;
+
+static TGT_WAVE_TYPE tgt_wave = TGT_WAVE_CONST;
+static float tgt_ampl = 0.0;
+static float tgt_ofst = 0.0;  
+static float tgt_freq = 0.0;        // [Hz]
+static uint64_t tgt_tstart_us = 0;  //
+
+float run_tgt_func(void);
 
 void loop() {
 
-  //genSensor.update();
-  //Serial.printf("%0.2f\t\t%0.2f\r\n", posLPF(genSensor.getAngle()), velLPF(genSensor.getVelocity()) );
+  genSensor.update();
+  //https://teleplot.fr/
+  //Serial.printf(">ang:%f\n>vel:%f\n", posLPF(genSensor.getAngle()), velLPF(genSensor.getVelocity()) );
   //delay(10);
 
   shell.update();
 
   motor.loopFOC();
+
   motor.move(target);
 
-  //PhaseCurrent_s currents = phase_current.getPhaseCurrents();
-  //float current_magnitude = phase_current.getDCCurrent();
+  PhaseCurrent_s currents = phase_current.getPhaseCurrents();
+  float current_magnitude = phase_current.getDCCurrent();
 
-  //Serial.printf("%0.2f\t%0.2f\t%0.2f\t%0.2f\r\n", currents.a * 1000.0, currents.b*1000.0, currents.c*1000.0, current_magnitude*1000.0);
+  //https://teleplot.fr/
+  if(mon_enabled)
+    Serial.printf(">a:%f\n>b:%f\n>c:%f\n>d:%f\n", currents.a * 1000.0, currents.b*1000.0, currents.c*1000.0, current_magnitude*1000.0);
 
   //motor.monitor();
+
+  float tt = run_tgt_func();
+  //Serial.printf("%f\r\n", tt);
+
+  //float dac_scale = 255.0 * tgt_ampl / tt;
+
+  dacWrite(26, (uint8_t)tt);
+  //Serial.printf(">tt:%f\n", tt);
+
 
 #if 0
   // put your main code here, to run repeatedly:
@@ -374,101 +430,92 @@ void loop() {
 
 } //end loop
 
-/// This is an example function for the cat command
-void cat_func(char *args, Stream *response )
-{
-
-  response -> print("Hello from cat function!\r\n");
-
-}
-
-/// This is an example function for the dog command
-void dog_func(char *args, Stream *response )
-{
-
-  response -> print("Hello from dog function!\r\n");
-
-}
-
-/// This is an example function for the led command
-void led_func(char *args, Stream *response )
-{
-
-  // Toggle your LED pin here, if you have on your board
-  // digitalWrite( LED_PIN, !digitalRead( LED_PIN ) );
-  response -> print("LED toggle!\r\n");
-
-}
-
-/// This is an example function for the sum command
-void sum_func(char *args, Stream *response )
-{
-
-  // These variables will hold the value of the
-  // two numbers, that has to be summed.
-  int a = 0;
-  int b = 0;
-
-  // This variable will hold the result of the
-  // argument parser.
-  int argResult;
-
-  // This variable will hold the sum result.
-  int sum = 0;
-
-  argResult = sscanf( args, "%d %d", &a, &b );
-
-  // We have to check that we parsed successfully  the two
-  // numbers from the argument string.
-  if( argResult != 2 ){
-
-    // If we could not parse two numbers, we have an argument problem.
-    // We print out the problem to the response channel.
-    response -> print( "Argument error! Two numbers required, separated with a blank space.\r\n" );
-
-    // Sadly we have to stop the command execution and return.
-    return;
-
-  }
-
-  // Calculate the sum.
-  sum = a + b;
-
-  // Print out the result.
-  response -> print( a );
-  response -> print( " + " );
-  response -> print( b );
-  response -> print( " = " );
-  response -> println( sum );
-
-}
-
 //commander function to enable / disable
 // example
 //  > ena 1
 //  > ena 0
 void mtr_ena_func(char *args, Stream *response){
-  // note:  the TMC6300 driver IC input pin 11 VIO/nSTDBY is driven by
-  //  ESP32_GPIO5
-  //
 
   int val = 0;
-
   int argResult = sscanf(args, "%d", &val);
-
-  if( argResult!=1 ){
-    Serial.println("Single [0|1] argument required...");
+  
+  if(EOF==argResult){
+    //No additional args, print current enabled state
+    response->println(motor.enabled);
     return;
   }
-
-  if(0==val)
-    motor.disable();
-  else if(1==val)
-    motor.enable();
-  else
-    Serial.println("Single [0|1] argument required...");
+  if(1==argResult){
+    // Single arg, check value to enable / disable
+    if(0==val){
+      motor.disable();
+      response->println(motor.enabled);
+    }
+    else if(1==val){
+      motor.enable();
+      response->println(motor.enabled);
+    }
+    else{
+      // Otherwise incorrect arg
+      Serial.println("Single [0|1] argument required...");
+    }
+  }
 
 }//mtr_ena_func
+
+// Monitor output enable / disable
+void mon_en_func(char *args, Stream *response){
+  int val = 0;
+  int argResult = sscanf(args, "%d", &val);
+
+  if(EOF==argResult){
+    //No additional args, print current enabled state
+    response->println(mon_enabled);
+    return;
+  }
+  if(1==argResult){
+    // Single arg, check value to enable / disable
+    if(0==val){
+      mon_enabled = false;
+      response->println(mon_enabled);
+    }
+    else if(1==val){
+      mon_enabled = true;
+      response->println(mon_enabled);
+    }
+    else{
+      // Otherwise incorrect arg
+      Serial.println("Single [0|1] argument required...");
+    }
+  }
+}//mon_en_func
+
+// RGB LED control
+// $ rgb <red> <grn> <blu> <pwr>  #set r g b and power level
+// $ rgb                          # query current values
+void rgb_func(char *args, Stream *response){
+  int r, g, b, p;
+  CRGB *led;
+  p = FastLED.getBrightness();
+  led = FastLED.leds();
+
+  int n = sscanf(args, "%d %d %d %d", &r, &g, &b, &p);
+  
+  if(EOF==n)
+    response->printf("%d %d %d %d", led->red, led->green, led->blue, p);
+  else if(4==n){
+    led->red = r;
+    led->green = g;
+    led->blue = b;
+    leds[0] = *led;
+    FastLED.setBrightness(p);
+    FastLED.show();
+    response->printf("%d %d %d %d", led->red, led->green, led->blue, p);
+  }
+  else{
+    response->printf("Incorrect args....\r\n");
+  }
+
+}// rgb_func
 
 void vel_kp_func(char *args, Stream *response){
   int n = 0;
@@ -484,6 +531,7 @@ void vel_kp_func(char *args, Stream *response){
   else
     response->printf("Incorrect args, [%d,%f]...\r\n",n,v);
 }
+
 void vel_ki_func(char *args, Stream *response){
   int n = 0;
   float v = 0.0;
@@ -512,6 +560,12 @@ void vel_kd_func(char *args, Stream *response){
   else
     response->printf("Incorrect args...\r\n");
 }
+
+ // Velocity output ramp       [rad/s^2]
+void vel_ra_func(char *args, Stream *response){}
+// Velocity Tf filter period  [s]
+void vel_tf_func(char *args, Stream *response){}
+
 void pos_kp_func(char *args, Stream *response){
   int n = 0;
   float v = 0.0;
@@ -525,7 +579,8 @@ void pos_kp_func(char *args, Stream *response){
   }
   else
     response->printf("Incorrect args...\r\n");
-};
+}
+
 void pos_ki_func(char *args, Stream *response){
   int n = 0;
   float v = 0.0;
@@ -539,7 +594,8 @@ void pos_ki_func(char *args, Stream *response){
   }
   else
     response->printf("Incorrect args...\r\n");
-};
+}
+
 void pos_kd_func(char *args, Stream *response){
   int n = 0;
   float v = 0.0;
@@ -553,5 +609,476 @@ void pos_kd_func(char *args, Stream *response){
   }
   else
     response->printf("Incorrect args...\r\n");
-};
+}
+
+// Position ramp,   [rad/s]
+void pos_ra_func(char *args, Stream *response){
+
+}
+// Position limit,  [rad]
+void pos_lm_func(char *args, Stream *response){
+
+}
+
+
+
+// run_tgt_func
+// this function to get called repeatedly to implement the needed waveform
+float run_tgt_func(void){
+
+  if(tgt_freq < 1e-3){
+    // Freq too small, set to static
+    tgt_wave = TGT_WAVE_CONST;
+  }
+    
+  switch(tgt_wave){
+    case TGT_WAVE_CONST:
+    {
+      // Constant value, return the amplitude
+      return tgt_ampl;
+      break;
+    }
+    case TGT_WAVE_SIN:
+    {
+      // sine wave; we need to see where in the cycle we are
+      uint64_t tgt_tdiff_us = micros() - tgt_tstart_us; //TODO handle rollover
+      // get period in us
+      static uint64_t tgt_period_us = (uint64_t)(1e6 / tgt_freq);
+      uint64_t tgt_modulo_us = tgt_tdiff_us % tgt_period_us;
+      //Given the remainder, we can calulate where we are in the cycle
+      float tgt_cycle_scale = (float)tgt_modulo_us / (float)tgt_period_us;
+      float ampl = tgt_ampl * sin(2.0 * PI * tgt_freq * tgt_cycle_scale) + tgt_ofst;
+      return (float)ampl;
+      break;
+    }
+    case TGT_WAVE_SQW:
+    {
+      // square wave; we need to see where in the cycle we are
+      return tgt_ampl;
+      break;
+    }
+    default:
+      break;
+  }
+
+}
+// Note
+// $ tgt con <ampl>
+// $ tgt sin <ampl> <freq_hz> <ofst> 
+// % tgt sqw <ampl> <freq_hz> <ofst>
+void set_tgt_func(char *args, Stream *response){
+  int n = 0;
+  //local vals
+  char wave_str[10] = {'\0'};
+  float ampl = 0.0;
+  float ofst = 0.0;
+  float freq = 0.0;
+
+  // TODO: prevent buffer overflow
+  n = sscanf(args, "%s %f %f %f", wave_str, &ampl, &freq, &ofst);
+
+  //note:  the first string, 'tgt' is not passed as part of the args
+  if(EOF==n){
+    //no args, return current target based on mode
+    switch(tgt_wave){
+      case TGT_WAVE_CONST:
+        // Show single target value
+        response->printf("con a[%f]\r\n", tgt_ampl);
+        break;
+      case TGT_WAVE_SIN:
+        // show sin wave values
+        response->printf("sin a[%f] f[%f] o[%f]\r\n", tgt_ampl, tgt_freq, tgt_ofst);
+        break;
+      case TGT_WAVE_SQW:
+        // show square wave values
+        response->printf("sqw a[%f] f[%f] o[%f]\r\n", tgt_ampl, tgt_freq, tgt_ofst);
+        break;
+      default:
+        // error
+        break;
+    }
+  }
+  else if(1==n){
+    // 1 arg can be val, sin, sqw, this just changes the mode and will not affect other values
+    if(0==strcmp("con", wave_str)){
+      // constant value
+      tgt_wave = TGT_WAVE_CONST;
+      tgt_tstart_us = micros();
+    }
+    else if(0==strcmp("sin", wave_str)){
+      // sine wave
+      tgt_wave = TGT_WAVE_SIN;
+      tgt_tstart_us = micros();
+    }
+    else if(0==strcmp("sqw", wave_str)){
+      // square wave
+      tgt_wave = TGT_WAVE_SQW;
+      tgt_tstart_us = micros();
+    }
+    else{
+      //error
+      response->printf("Invalid arg [%s]\r\n", wave_str);
+    }
+  }
+  else if(2==n){
+    //2 args:type and ampl
+    if(0==strcmp("con", wave_str)){
+      // constant value
+      tgt_wave = TGT_WAVE_CONST;
+      tgt_tstart_us = micros();
+      tgt_ampl = ampl;
+    }
+    else if(0==strcmp("sin", wave_str)){
+      // sine wave
+      tgt_wave = TGT_WAVE_SIN;
+      tgt_tstart_us = micros();
+      tgt_ampl = ampl;
+    }
+    else if(0==strcmp("sqw", wave_str)){
+      // square wave
+      tgt_wave = TGT_WAVE_SQW;
+      tgt_tstart_us = micros();
+      tgt_ampl = ampl;
+    }
+    else{
+      //error
+      response->printf("Invalid arg [%s %f]\r\n", wave_str, ampl);
+    }
+  }
+  else if(3==n){
+    // 3 args: type ampl freq
+    if(0==strcmp("con", wave_str)){
+      // constant value
+      tgt_wave = TGT_WAVE_CONST;
+      tgt_tstart_us = micros();
+      tgt_ampl = ampl;
+      tgt_freq = freq;
+    }
+    else if(0==strcmp("sin", wave_str)){
+      // sine wave
+      tgt_wave = TGT_WAVE_SIN;
+      tgt_tstart_us = micros();
+      tgt_ampl = ampl;
+      tgt_freq = freq;
+    }
+    else if(0==strcmp("sqw", wave_str)){
+      // square wave
+      tgt_wave = TGT_WAVE_SQW;
+      tgt_tstart_us = micros();
+      tgt_ampl = ampl;
+      tgt_freq = freq;
+    }
+    else{
+      //error
+      response->printf("Invalid arg [%s %f %f]\r\n", wave_str, ampl, freq);
+    }
+  }
+  else if(4==n){
+    // 4 args: type ampl freq ofst
+    if(0==strcmp("con", wave_str)){
+      // constant value
+      tgt_wave = TGT_WAVE_CONST;
+      tgt_tstart_us = micros();
+      tgt_ampl = ampl;
+      tgt_freq = freq;
+      tgt_ofst = ofst;
+    }
+    else if(0==strcmp("sin", wave_str)){
+      // sine wave
+      tgt_wave = TGT_WAVE_SIN;
+      tgt_tstart_us = micros();
+      tgt_ampl = ampl;
+      tgt_freq = freq;
+      tgt_ofst = ofst;
+    }
+    else if(0==strcmp("sqw", wave_str)){
+      // square wave
+      tgt_wave = TGT_WAVE_SQW;
+      tgt_tstart_us = micros();
+      tgt_ampl = ampl;
+      tgt_freq = freq;
+      tgt_ofst = ofst;
+    }
+    else{
+      //error
+      response->printf("Invalid arg [%s %f %f %f]\r\n", wave_str, ampl, freq, ofst);
+    }
+  }
+  else{
+    // error
+  }
+} //set_tgt_func
+
+// command
+//  $ pid <pos|vel|ud|uq> <kp|ki|kd|tf|ra|pl|vl|lm> [<float>]
+//  $ pid pos kp # returns kp gain for position control
+//  $ pid uq ki 0.102 # sets the integral gain for the Uq PID controller
+void pid_shell_func( char *args, Stream *response ){
+  #define MAX_STRLEN 10
+
+  int n = 0;
+  char type[MAX_STRLEN];   //TODO: handle buffer overflow
+  char param[MAX_STRLEN];  //TODO: hadle buffer overflow
+  float value = 0.0;
+  n = sscanf(args, "%s %s %f", type, param, &value);
+  //debug
+  //response->printf("{%s %s %f}\r\n");
+  if(EOF==n)
+    response->printf("no args");
+  else if(2==n){
+    // get
+    if(0==strcmp("pos", type)){
+      // get pos
+      if(0==strcmp("kp", param)){
+        // get pos kp
+        response->printf("%f\r\n", motor.P_angle.P);
+      }
+      else if(0==strcmp("ki", param)){
+        // get pos ki
+        response->printf("%f\r\n", motor.P_angle.I);
+      }
+      else if(0==strcmp("kd", param)){
+        // get pos kd
+        response->printf("%f\r\n", motor.P_angle.D);
+      }
+      else if(0==strcmp("tf", param)){
+        // get pos tf
+        response->printf("%f\r\n", motor.LPF_angle.Tf);
+      }
+      else if(0==strcmp("ra", param)){
+        // get pos ramp
+        response->printf("%f\r\n", motor.P_angle.output_ramp);
+      }
+      else if(0==strcmp("pl", param)){
+        // get pos limit
+        response->printf("%f\r\n", motor.P_angle.limit);
+      }
+      else if(0==strcmp("vl", param)){
+        // get pos velocity limit
+        response->printf("%f\r\n", motor.velocity_limit);
+      }
+      else{
+        //error
+        response->printf("Invalid param [%s]\r\n", param);
+      }
+    }
+    else if (0==strcmp("vel", type)){
+      // get vel
+      if(0==strcmp("kp", param)){
+        // get vel kp
+        response->printf("%f\r\n", motor.PID_velocity.P);
+      }
+      else if(0==strcmp("ki", param)){
+        // get vel ki
+        response->printf("%f\r\n", motor.PID_velocity.I);
+      }
+      else if(0==strcmp("kd", param)){
+        // get vel kd
+        response->printf("%f\r\n", motor.PID_velocity.D);
+      }
+      else if(0==strcmp("tf", param)){
+        // get vel tf     [s]
+        response->printf("%f\r\n", motor.LPF_velocity.Tf);
+      }
+      else if(0==strcmp("ra", param)){
+        // get vel ramp,  [V/s]
+        response->printf("%f\r\n", motor.PID_velocity.output_ramp);
+      }
+      else if(0==strcmp("lm", param)){
+        response->printf("%f\r\n", motor.PID_velocity.limit);
+      }
+      else{
+        //error
+        response->printf("Invalid param [%s]\r\n", param);
+      }
+    }
+    else if (0==strcmp("ud", type)){
+      if(0==strcmp("kp", param)){
+        // get ud kp
+        response->printf("%f\r\n", motor.PID_current_d.P);
+      }
+      else if(0==strcmp("ki", param)){
+        // get ud ki
+        response->printf("%f\r\n", motor.PID_current_d.I);
+      }
+      else if(0==strcmp("kd", param)){
+        // get ud kd
+        response->printf("%f\r\n", motor.PID_current_d.D);
+      }
+      else if(0==strcmp("ra", param)){
+        // get ud tf
+        response->printf("%f\r\n", motor.PID_current_d.output_ramp);
+      }
+      else if(0==strcmp("lm", param)){
+        // get ud limit
+        response->printf("%f\r\n", motor.PID_current_d.limit);
+      }
+      else{
+        //error
+        response->printf("Invalid param [%s]\r\n", param);
+      }
+    }
+    else if (0==strcmp("uq", type)){
+      if(0==strcmp("kp", param)){
+        // get uq kp
+        response->printf("%f\r\n", motor.PID_current_q.P);
+      }
+      else if(0==strcmp("ki", param)){
+        // get uq ki
+        response->printf("%f\r\n", motor.PID_current_q.I);
+      }
+      else if(0==strcmp("kd", param)){
+        // get uq kd
+        response->printf("%f\r\n", motor.PID_current_q.D);
+      }
+      else if(0==strcmp("ra", param)){
+        // get uq tf
+        response->printf("%f\r\n", motor.PID_current_q.output_ramp);
+      }
+      else if(0==strcmp("lm", param)){
+        // get uq limit
+        response->printf("%f\r\n", motor.PID_current_q.limit);
+      }
+      else{
+        //error
+        response->printf("Invalid param [%s]\r\n", param);
+      }
+    }
+    else{
+      // Error
+      response->printf("Invalid type [%s]\r\n", type);
+    }
+  }
+  else if(3==n){
+    // Set value
+    if(0==strcmp("pos", type)){
+      if(0==strcmp("kp", param)){
+        // set pos kp
+        motor.P_angle.P = value;
+      }
+      else if(0==strcmp("ki", param)){
+        // set pos ki
+        motor.P_angle.I = value;
+      }
+      else if(0==strcmp("kd", param)){
+        // set pos kd
+        motor.P_angle.D = value;
+      }
+      else if(0==strcmp("tf", param)){
+        // set pos tf
+        motor.LPF_angle.Tf = value;
+      }
+      else if(0==strcmp("ra", param)){
+        // set pos ramp
+        motor.P_angle.output_ramp = value;
+      }
+      else if(0==strcmp("lm", param)){
+        // set pos limit
+        motor.P_angle.limit = value;
+      }
+      else{
+        //error
+        response->printf("Invalid param [%s]\r\n", param);
+      }
+    }
+    else if (0==strcmp("vel", type)){
+      if(0==strcmp("kp", param)){
+        // set vel kp
+        motor.PID_velocity.P = value;
+      }
+      else if(0==strcmp("ki", param)){
+        // set vel ki
+        motor.PID_velocity.I = value;
+      }
+      else if(0==strcmp("kd", param)){
+        // set vel kd
+        motor.PID_velocity.D = value;
+      }
+      else if(0==strcmp("tf", param)){
+        // set vel tf     [s]
+        motor.LPF_velocity.Tf = value;
+      }
+      else if(0==strcmp("ra", param)){
+        // set vel ramp,  [V/s]
+        motor.PID_velocity.output_ramp = value;
+      }
+      else if(0==strcmp("lm", param)){
+        // set vel limit [rad/s]?
+        motor.PID_velocity.limit = value;
+      }
+      else{
+        //error
+        response->printf("Invalid param [%s]\r\n", param);
+      }
+    }
+    else if (0==strcmp("ud", type)){
+      if(0==strcmp("kp", param)){
+        // set ud kp
+        motor.PID_current_d.P = value;
+      }
+      else if(0==strcmp("ki", param)){
+        // set ud ki
+        motor.PID_current_d.I = value;
+      }
+      else if(0==strcmp("kd", param)){
+        // set ud kd
+        motor.PID_current_d.D = value;
+      }
+      else if(0==strcmp("ra", param)){
+        // set ud ra
+        motor.PID_current_d.output_ramp = value;
+      }
+      else if(0==strcmp("lm", param)){
+        // set ud limit
+        motor.PID_current_d.limit = value;
+      }
+      else{
+        //error
+        response->printf("Invalid param [%s]\r\n", param);
+      }
+    }
+    else if (0==strcmp("uq", type)){
+      if(0==strcmp("kp", param)){
+        // set uq kp
+        motor.PID_current_q.P = value;
+      }
+      else if(0==strcmp("ki", param)){
+        // set uq ki
+        motor.PID_current_q.I = value;
+      }
+      else if(0==strcmp("kd", param)){
+        // set uq kd
+        motor.PID_current_q.D = value;
+      }
+      else if(0==strcmp("ra", param)){
+        // set uq ra
+        motor.PID_current_q.output_ramp = value;
+      }
+      else if(0==strcmp("lm", param)){
+        // set uq lm
+        motor.PID_current_q.limit = value;
+      }
+      else{
+        //error
+        response->printf("Invalid param [%s]\r\n", param);
+      }
+    }
+    else{
+      // Error
+      response->printf("Invalid type [%s]\r\n", type);
+    }
+  }
+  else{
+    response->printf("err args");
+  }
+
+}// pid_shell_func
+
+
+
+
+
+
+
+
 
