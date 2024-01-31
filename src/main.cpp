@@ -281,12 +281,12 @@ void setup() {
   motor.PID_current_d.output_ramp = 1e6;
   motor.LPF_current_d.Tf = 0.01;
 
-  motor.PID_current_d.P = 0.0;
-  motor.PID_current_d.I = 0.0;
-  motor.PID_current_d.D = 0.0;
-  motor.PID_current_d.limit = motor.voltage_limit;
-  motor.PID_current_d.output_ramp = 1e6;
-  motor.LPF_current_d.Tf = 0.01;
+  motor.PID_current_q.P = 0.0;
+  motor.PID_current_q.I = 0.0;
+  motor.PID_current_q.D = 0.0;
+  motor.PID_current_q.limit = motor.voltage_limit;
+  motor.PID_current_q.output_ramp = 1e6;
+  motor.LPF_current_q.Tf = 0.01;
   
 
   motor.init();
@@ -359,24 +359,29 @@ void loop() {
 
   motor.loopFOC();
 
-  motor.move(target);
 
-  //PhaseCurrent_s currents = phase_current.getPhaseCurrents();
-  //float current_magnitude = phase_current.getDCCurrent();
+  motor.move( run_tgt_func() );
+
+  PhaseCurrent_s currents = phase_current.getPhaseCurrents();
+  float current_magnitude = phase_current.getDCCurrent();
 
   //https://teleplot.fr/
-  //if(mon_enabled)
-  //  Serial.printf(">a:%f\n>b:%f\n>c:%f\n>d:%f\n", currents.a * 1000.0, currents.b*1000.0, currents.c*1000.0, current_magnitude*1000.0);
-
+  if(mon_enabled){
+  
+    //Serial.printf(">a:%f\n>b:%f\n>c:%f\n>d:%f\n", currents.a * 1000.0, currents.b*1000.0, currents.c*1000.0, current_magnitude*1000.0);
+    Serial.printf(">tgt:%f\n>act:%f\n", motor.target, current_magnitude);
+  }
+  
+  
   //motor.monitor();
 
-  float tt = run_tgt_func();
+  //float tt = run_tgt_func();
   //Serial.printf("%f\r\n", tt);
 
   //float dac_scale = 255.0 * tgt_ampl / tt;
 
   //dacWrite(26, (uint8_t)tt);
-  Serial.printf(">tt:%f\n", tt);
+  //Serial.printf(">tt:%f\n", tt);
 
 #if 0
   // put your main code here, to run repeatedly:
@@ -668,7 +673,6 @@ float run_tgt_func(void){
         float ampl = tgt_ofst;
         return (float)ampl;
       }
-
       break;
     }
     default:
@@ -927,6 +931,10 @@ void pid_shell_func( char *args, Stream *response ){
         // get ud limit
         response->printf("%f\r\n", motor.PID_current_d.limit);
       }
+      else if(0==strcmp("tf", param)){
+        //get filter period
+        response->printf("%f\r\n", motor.LPF_current_d.Tf);
+      }
       else{
         //error
         response->printf("Invalid param [%s]\r\n", param);
@@ -952,6 +960,10 @@ void pid_shell_func( char *args, Stream *response ){
       else if(0==strcmp("lm", param)){
         // get uq limit
         response->printf("%f\r\n", motor.PID_current_q.limit);
+      }
+      else if(0==strcmp("tf", param)){
+        //get filter period
+        response->printf("%f\r\n", motor.LPF_current_q.Tf);
       }
       else{
         //error
@@ -1046,6 +1058,9 @@ void pid_shell_func( char *args, Stream *response ){
         // set ud limit
         motor.PID_current_d.limit = value;
       }
+      else if(0==strcmp("tf", param)){
+        motor.LPF_current_d.Tf = value;
+      }
       else{
         //error
         response->printf("Invalid param [%s]\r\n", param);
@@ -1071,6 +1086,9 @@ void pid_shell_func( char *args, Stream *response ){
       else if(0==strcmp("lm", param)){
         // set uq lm
         motor.PID_current_q.limit = value;
+      }
+      else if(0==strcmp("tf", param)){
+        motor.LPF_current_q.Tf = value;
       }
       else{
         //error
