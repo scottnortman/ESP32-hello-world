@@ -347,6 +347,7 @@ static uint64_t tgt_tstart_us = 0;  //
 
 float run_tgt_func(void);
 
+static bool pstate = 0;
 void loop() {
 
   genSensor.update();
@@ -360,12 +361,12 @@ void loop() {
 
   motor.move(target);
 
-  PhaseCurrent_s currents = phase_current.getPhaseCurrents();
-  float current_magnitude = phase_current.getDCCurrent();
+  //PhaseCurrent_s currents = phase_current.getPhaseCurrents();
+  //float current_magnitude = phase_current.getDCCurrent();
 
   //https://teleplot.fr/
-  if(mon_enabled)
-    Serial.printf(">a:%f\n>b:%f\n>c:%f\n>d:%f\n", currents.a * 1000.0, currents.b*1000.0, currents.c*1000.0, current_magnitude*1000.0);
+  //if(mon_enabled)
+  //  Serial.printf(">a:%f\n>b:%f\n>c:%f\n>d:%f\n", currents.a * 1000.0, currents.b*1000.0, currents.c*1000.0, current_magnitude*1000.0);
 
   //motor.monitor();
 
@@ -374,9 +375,8 @@ void loop() {
 
   //float dac_scale = 255.0 * tgt_ampl / tt;
 
-  dacWrite(26, (uint8_t)tt);
-  //Serial.printf(">tt:%f\n", tt);
-
+  //dacWrite(26, (uint8_t)tt);
+  Serial.printf(">tt:%f\n", tt);
 
 #if 0
   // put your main code here, to run repeatedly:
@@ -643,7 +643,7 @@ float run_tgt_func(void){
       // sine wave; we need to see where in the cycle we are
       uint64_t tgt_tdiff_us = micros() - tgt_tstart_us; //TODO handle rollover
       // get period in us
-      static uint64_t tgt_period_us = (uint64_t)(1e6 / tgt_freq);
+      uint64_t tgt_period_us = (uint64_t)(1e6 / tgt_freq);
       uint64_t tgt_modulo_us = tgt_tdiff_us % tgt_period_us;
       //Given the remainder, we can calulate where we are in the cycle
       float tgt_cycle_scale = (float)tgt_modulo_us / (float)tgt_period_us;
@@ -653,8 +653,22 @@ float run_tgt_func(void){
     }
     case TGT_WAVE_SQW:
     {
-      // square wave; we need to see where in the cycle we are
-      return tgt_ampl;
+      // 50% DC square wave; we need to see where in the cycle we are
+      uint64_t tgt_tdiff_us = micros() - tgt_tstart_us; //TODO handle rollover
+      // get period in us
+      uint64_t tgt_period_us = (uint64_t)(1e6 / tgt_freq);
+      uint64_t tgt_modulo_us = tgt_tdiff_us % tgt_period_us;
+      float tgt_cycle_scale = (float)tgt_modulo_us / (float)tgt_period_us;
+      if( tgt_cycle_scale < 0.5 ){
+        // First half of the cycle; output high value
+        float ampl = tgt_ampl + tgt_ofst;
+        return (float)ampl;
+      }
+      else{
+        float ampl = tgt_ofst;
+        return (float)ampl;
+      }
+
       break;
     }
     default:
