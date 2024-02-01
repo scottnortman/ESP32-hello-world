@@ -27,6 +27,10 @@
 #define DEG2RAD(dd) ((float)dd*(float)0.01745329251)
 #define RAD2DEG(rr)
 
+//float to int
+//https://jkorpela.fi/round.html
+#define ROUND(x) ((x)>=0?(uint64_t)((x)+0.5):(uint64_t)((x)-0.5))
+
 
 CRGB leds[NUM_LEDS];
 
@@ -648,11 +652,12 @@ float run_tgt_func(void){
       // sine wave; we need to see where in the cycle we are
       uint64_t tgt_tdiff_us = micros() - tgt_tstart_us; //TODO handle rollover
       // get period in us
-      uint64_t tgt_period_us = (uint64_t)(1e6 / tgt_freq);
+      uint64_t tgt_period_us = ROUND(1e6 / tgt_freq);
       uint64_t tgt_modulo_us = tgt_tdiff_us % tgt_period_us;
       //Given the remainder, we can calulate where we are in the cycle
       float tgt_cycle_scale = (float)tgt_modulo_us / (float)tgt_period_us;
-      float ampl = tgt_ampl * sin(2.0 * PI * tgt_freq * tgt_cycle_scale) + tgt_ofst;
+      float val = 2.0 * PI * tgt_cycle_scale;
+      float ampl = tgt_ampl * sin(val) + tgt_ofst;
       return (float)ampl;
       break;
     }
