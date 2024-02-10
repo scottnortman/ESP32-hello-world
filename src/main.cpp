@@ -343,6 +343,12 @@ typedef enum
   TGT_WAVE_SQW = 2,
 } TGT_WAVE_TYPE;
 
+typedef struct{
+  static TGT_WAVE_TYPE tgt_wave;
+
+
+} tgt_wave_struct;
+
 static TGT_WAVE_TYPE tgt_wave = TGT_WAVE_CONST;
 static float tgt_ampl = 0.0;
 static float tgt_ofst = 0.0;  
@@ -375,6 +381,8 @@ void loop() {
     //Serial.printf(">a:%f\n>b:%f\n>c:%f\n>d:%f\n", currents.a * 1000.0, currents.b*1000.0, currents.c*1000.0, current_magnitude*1000.0);
     Serial.printf(">tgt:%f\n>act:%f\n", motor.target, current_magnitude);
   }
+
+  motor.feed_forward_velocity
   
   
   //motor.monitor();
@@ -690,6 +698,7 @@ float run_tgt_func(void){
 // $ tgt sin <ampl> <freq_hz> <ofst> 
 // % tgt sqw <ampl> <freq_hz> <ofst>
 void set_tgt_func(char *args, Stream *response){
+  
   int n = 0;
   //local vals
   char wave_str[10] = {'\0'};
